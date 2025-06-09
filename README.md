@@ -4,7 +4,7 @@
 
 ### 클린 아키텍처 기반의 화상 회의 백엔드
 
-Express + Socket.io + MongoDB + Clean Architecture
+Express + Socket.io + MySQL + Clean Architecture
 
 ---
 
@@ -50,7 +50,7 @@ Express + Socket.io + MongoDB + Clean Architecture
 | 언어         | TypeScript, JavaScript       |
 | 런타임       | Node.js                      |
 | 프레임워크   | Express, Socket.io           |
-| 데이터베이스 | MongoDB + Mongoose           |
+| 데이터베이스 | MySQL                        |
 | 인증         | JWT                          |
 | 구조 설계    | Clean Architecture, REST API |
 
