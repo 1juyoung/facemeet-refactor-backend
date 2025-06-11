@@ -1,30 +1,43 @@
+// server.ts
+
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' }); // 반드시 최상단
+
 import express from 'express';
-import http from 'http';
 import cors from 'cors';
+import http from 'http';
+import logger from 'morgan';
+
+import socketHandler from '../socket/socketHandler';
+import db from '../mysql/db';
 
 const app = express();
-
-app.use(cors());
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const PORT = 3001;
 
 const server = http.createServer(app);
 
-let chatMessages = []; //채팅을 저장하기 위한 변수
+async function startServer() {
+  try {
+    await db.query('SELECT 1');
+    console.log('✅ MySQL 연결 성공');
 
-app.post('/message', (req, res) => {
-  const { message } = req.body;
-  if (message) {
-    chatMessages.push(message);
-    res.status(200).json({ success: true, message: 'Message received' });
-  } else {
-    res.status(400).json({ success: false, message: 'No message provided' });
+    socketHandler(server);
+
+    app.use(logger('dev'));
+    app.use(express.json());
+    app.use(cors());
+
+    app.get('/', (req, res) => {
+      res.send('Backend API is running!');
+    });
+
+    server.listen(PORT, () => {
+      console.log(`🚀 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+    });
+  } catch (err) {
+    console.error('❌ MySQL 연결 실패:', err);
+    process.exit(1);
   }
-});
+}
 
-app.get('/message', async (req, res) => {
-  res.status(200).json(chatMessages);
-});
-
-server.listen(5000, () => console.log('Server running on port 5000'));
+startServer();
