@@ -22,9 +22,12 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "morgan": "^1.10.0",
     "mysql2": "^3.14.1",
-    "socket.io": "^4.8.1"
+    "socket.io": "2.3.0",
+    "wrtc": "^0.4.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
