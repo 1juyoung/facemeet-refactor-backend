@@ -101,5 +101,3 @@ cp .env.example .env     # DATABASE_URL, JWT_SECRET 등 입력
 npm run db:migrate       # MySQL에 테이블 생성
 npm run dev              # 개발 서버 (http://localhost:3001)
 ```
-
-배포 방법(EC2, Caddy, coturn, MySQL)은 [docs/DEPLOY.md](docs/DEPLOY.md)를 참고하세요.
