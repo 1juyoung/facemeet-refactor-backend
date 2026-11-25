@@ -1,0 +1,8 @@
+# /etc/caddy/Caddyfile
+# DOMAIN 을 실제 도메인으로 바꾸세요 (예: facemeet.duckdns.org)
+# Caddy가 Let's Encrypt 인증서를 자동으로 발급·갱신합니다.
+DOMAIN {
+	encode gzip
+	# REST API + Socket.IO(WebSocket) 모두 Node 서버로 전달
+	reverse_proxy localhost:3001
+}
