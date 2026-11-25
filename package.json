@@ -21,14 +21,25 @@
     "lint": "eslint ./src --ext .ts"
   },
   "dependencies": {
+    "@roamhq/wrtc": "^0.10.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.1",
     "mysql2": "^3.14.1",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
     "@types/node": "^22.15.30",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.33.1",
     "@typescript-eslint/parser": "^8.33.1",
     "@typescript-eslint/utils": "^8.33.1",

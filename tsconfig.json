@@ -4,7 +4,9 @@
     "moduleDetection": "force",
     "module": "CommonJS",
     "target": "ES6",
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "lib": ["ES6", "dom"]
   },
   "include": ["src"]
 }
