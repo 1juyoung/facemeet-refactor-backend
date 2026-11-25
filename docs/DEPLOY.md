@@ -80,7 +80,7 @@ JWT_SECRET=<긴 랜덤 문자열>
 STUN_URL=stun:stun.l.google.com:19302
 TURN_URL=turn:DOMAIN:3478?transport=udp,turn:DOMAIN:3478?transport=tcp
 TURN_SECRET=<긴 랜덤 문자열 — coturn 설정과 동일>
-# DB_* 는 회의 API를 쓸 때 설정 (2단계)
+# DATABASE_URL 은 회원가입·회의 API용 (11. DB 설정 참고)
 ```
 랜덤 문자열 만들기: `openssl rand -hex 32`
 
@@ -125,7 +125,6 @@ curl https://<도메인>/api/ice-servers   # TURN 항목과 username/credential 
 2. Environment Variables
    - `NEXT_PUBLIC_API_URL` = `https://<도메인>/api`
    - `NEXT_PUBLIC_SOCKET_URL` = `https://<도메인>`
-   - (카카오 로그인·Prisma를 쓰는 화면용) `DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `KAKAO_CLIENT_ID`, `KAKAO_CLIENT_SECRET`
 3. Deploy → 나온 주소를 백엔드 `.env`의 `FRONTEND_URL` 에 넣고 `sudo systemctl restart facemeet-backend`
 
 ## 8. 동작 확인 체크리스트
@@ -151,6 +150,67 @@ curl https://<도메인>/api/ice-servers   # TURN 항목과 username/credential 
 - 브라우저: `chrome://webrtc-internals` 의 수신 비트레이트, 패킷 손실, 초당 프레임
 - 결과를 표로 남겨두면 "왜 mediasoup으로 바꿨는지 / 바꾸지 않았는지"를 수치로 설명할 수 있습니다.
 
+## 11. DB 설정 (MySQL 8 + Prisma)
+DB는 같은 EC2 안에서만 접근합니다. **보안 그룹에 3306 포트를 열지 마세요.**
+
+### 11-1. MySQL 설치 (메모리 1GB용으로 가볍게)
+```bash
+sudo apt install -y mysql-server
+
+# 메모리 사용량 줄이기 (기본 설정은 1GB 서버에 무거움)
+sudo tee /etc/mysql/mysql.conf.d/zz-facemeet.cnf > /dev/null <<'CNF'
+[mysqld]
+bind-address = 127.0.0.1
+performance_schema = OFF
+innodb_buffer_pool_size = 64M
+innodb_log_buffer_size = 8M
+max_connections = 30
+key_buffer_size = 8M
+table_open_cache = 200
+CNF
+sudo systemctl restart mysql
+```
+
+### 11-2. DB와 전용 계정 만들기
+```bash
+DB_PW=$(openssl rand -hex 16); echo "DB 비밀번호: $DB_PW"   # 메모해 두기
+sudo mysql <<SQL
+CREATE DATABASE facemeet CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'facemeet'@'localhost' IDENTIFIED BY '$DB_PW';
+GRANT ALL PRIVILEGES ON facemeet.* TO 'facemeet'@'localhost';
+SQL
+```
+
+### 11-3. 백엔드에 연결하고 테이블 만들기
+```bash
+cd ~/facemeet-refactor-backend
+nano .env    # 아래 한 줄 추가 (비밀번호는 위에서 만든 값)
+# DATABASE_URL=mysql://facemeet:<DB 비밀번호>@localhost:3306/facemeet
+
+git pull && npm ci
+set -a; source .env; set +a      # .env 값을 현재 셸에 불러오기 (prisma 명령용)
+npm run db:migrate               # prisma/migrations 를 DB에 적용 → User, Meeting ... 테이블 생성
+npm run build
+sudo systemctl restart facemeet-backend
+```
+
+확인:
+```bash
+sudo mysql facemeet -e "SHOW TABLES;"     # 5개 테이블 + _prisma_migrations
+curl -s -X POST https://<도메인>/api/auth/register -H 'Content-Type: application/json' \
+  -d '{"email":"test@test.com","password":"test1234","nickname":"테스트"}'   # token 이 오면 OK
+```
+
+### 11-4. 이후 스키마를 바꿀 때
+1. `prisma/schema.prisma` 수정
+2. 로컬에서 `npx prisma migrate dev --name <변경내용>` → `prisma/migrations/` 에 SQL 생성 → 커밋
+3. 서버에서 `git pull && npm ci && npm run db:migrate && npm run build && sudo systemctl restart facemeet-backend`
+
+### 11-5. 백업 (선택)
+```bash
+sudo mysqldump facemeet > ~/facemeet-$(date +%F).sql
+```
+
 ## 다음 단계
-- 2단계: MySQL 설치 및 스키마 적용 → 회원가입·회의·회의록 API 동작
-- 3단계: 디자인 시안대로 화면 구현
+- 디자인 시안대로 나머지 화면(회의록, 프로필, 인증) 구현
+- 백엔드 CI/CD (push 시 자동 배포)

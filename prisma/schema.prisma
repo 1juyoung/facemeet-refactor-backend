@@ -1,0 +1,72 @@
+// FaceMeet DB 스키마 (MySQL 8)
+// 테이블 이름은 PascalCase(User, Meeting, ...)로 만들어진다.
+// 변경 후: npx prisma migrate dev --name <변경내용>  → 서버에서는 npx prisma migrate deploy
+
+generator client {
+  provider   = "prisma-client-js"
+  // Rust 엔진 바이너리 없이 TypeScript/WASM 쿼리 컴파일러 + mariadb 드라이버 사용 (메모리 절약, 설치 단순)
+  engineType = "client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String        @id @default(uuid())
+  email       String        @unique
+  password    String
+  nickname    String
+  state       Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  participant Participant[]
+}
+
+model Meeting {
+  id           String         @id @default(uuid())
+  title        String
+  created_at   DateTime       @default(now())
+  delete_at    DateTime?
+  participant  Participant[]
+  emotionscore EmotionScore[]
+  note         Note[]
+}
+
+model Participant {
+  id         String    @id @default(uuid())
+  user_id    String
+  meeting_id String
+  joined_at  DateTime  @default(now())
+  left_at    DateTime?
+  user       User      @relation(fields: [user_id], references: [id])
+  meeting    Meeting   @relation(fields: [meeting_id], references: [id])
+
+  // 같은 회의에 같은 사용자가 두 번 참가 기록되지 않도록
+  @@unique([meeting_id, user_id])
+  @@index([user_id])
+}
+
+model EmotionScore {
+  id         String   @id @default(uuid())
+  meeting_id String
+  created_at DateTime @default(now())
+  score      Float
+  meeting    Meeting  @relation(fields: [meeting_id], references: [id])
+  note       Note[]
+
+  @@index([meeting_id])
+}
+
+model Note {
+  id               String       @id @default(uuid())
+  meeting_id       String
+  emotion_score_id String
+  date             DateTime     @default(now())
+  content          String       @db.Text // 회의록은 길어질 수 있어 VARCHAR(191) 대신 TEXT
+  meeting          Meeting      @relation(fields: [meeting_id], references: [id])
+  emotionscore     EmotionScore @relation(fields: [emotion_score_id], references: [id])
+
+  @@index([meeting_id])
+  @@index([emotion_score_id])
+}

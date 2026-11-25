@@ -1,100 +1,70 @@
-import { v4 as uuidv4 } from 'uuid';
-import db from '../config/db';
-import { Note, EmotionScore, NoteWithScore } from '../types';
-import mysql from 'mysql2/promise';
+import prisma from '../config/prisma';
+import { NoteWithScore } from '../types';
+
+const noteInclude = { emotionscore: true } as const;
+
+type NoteRow = {
+  id: string;
+  meeting_id: string;
+  emotion_score_id: string;
+  date: Date;
+  content: string;
+  emotionscore: { id: string; meeting_id: string; created_at: Date; score: number } | null;
+};
+
+/** 기존 API 응답 형태(emotion_score 필드) 유지 */
+function toNoteWithScore({ emotionscore, ...note }: NoteRow): NoteWithScore {
+  return { ...note, emotion_score: emotionscore };
+}
 
 export async function getNotesByMeeting(meetingId: string): Promise<NoteWithScore[]> {
-  const [rows] = await db.execute<mysql.RowDataPacket[]>(
-    `SELECT n.id, n.meeting_id, n.emotion_score_id, n.date, n.content,
-            e.score, e.created_at as score_created_at
-     FROM Note n
-     LEFT JOIN EmotionScore e ON n.emotion_score_id = e.id
-     WHERE n.meeting_id = ?
-     ORDER BY n.date DESC`,
-    [meetingId]
-  );
-  return rows.map((row) => ({
-    id: row.id,
-    meeting_id: row.meeting_id,
-    emotion_score_id: row.emotion_score_id,
-    date: row.date,
-    content: row.content,
-    emotion_score: row.score !== null
-      ? { id: row.emotion_score_id, meeting_id: row.meeting_id, created_at: row.score_created_at, score: row.score }
-      : null,
-  }));
+  const notes = await prisma.note.findMany({
+    where: { meeting_id: meetingId },
+    orderBy: { date: 'desc' },
+    include: noteInclude,
+  });
+  return notes.map(toNoteWithScore);
 }
 
 export async function getNoteById(id: string): Promise<NoteWithScore | null> {
-  const [rows] = await db.execute<mysql.RowDataPacket[]>(
-    `SELECT n.id, n.meeting_id, n.emotion_score_id, n.date, n.content,
-            e.score, e.created_at as score_created_at
-     FROM Note n
-     LEFT JOIN EmotionScore e ON n.emotion_score_id = e.id
-     WHERE n.id = ?`,
-    [id]
-  );
-  if (rows.length === 0) return null;
-  const row = rows[0];
-  return {
-    id: row.id,
-    meeting_id: row.meeting_id,
-    emotion_score_id: row.emotion_score_id,
-    date: row.date,
-    content: row.content,
-    emotion_score: row.score !== null
-      ? { id: row.emotion_score_id, meeting_id: row.meeting_id, created_at: row.score_created_at, score: row.score }
-      : null,
-  };
+  const note = await prisma.note.findUnique({ where: { id }, include: noteInclude });
+  return note ? toNoteWithScore(note) : null;
 }
 
-export async function createNote(
-  meetingId: string,
-  content: string,
-  score: number
-): Promise<NoteWithScore> {
-  const scoreId = uuidv4();
-  const noteId = uuidv4();
-
-  await db.execute(
-    'INSERT INTO EmotionScore (id, meeting_id, score, created_at) VALUES (?, ?, ?, NOW())',
-    [scoreId, meetingId, score]
-  );
-  await db.execute(
-    'INSERT INTO Note (id, meeting_id, emotion_score_id, date, content) VALUES (?, ?, ?, NOW(), ?)',
-    [noteId, meetingId, scoreId, content]
-  );
-
-  const note = await getNoteById(noteId);
-  if (!note) throw new Error('회의록 생성에 실패했습니다.');
-  return note;
+export async function createNote(meetingId: string, content: string, score: number): Promise<NoteWithScore> {
+  // 감정 점수와 회의록을 함께 생성 (중첩 create → 하나의 트랜잭션)
+  const note = await prisma.note.create({
+    data: {
+      content,
+      meeting: { connect: { id: meetingId } },
+      emotionscore: { create: { score, meeting: { connect: { id: meetingId } } } },
+    },
+    include: noteInclude,
+  });
+  return toNoteWithScore(note);
 }
 
-export async function updateNote(
-  id: string,
-  data: { content?: string; score?: number }
-): Promise<NoteWithScore> {
-  const note = await getNoteById(id);
+export async function updateNote(id: string, data: { content?: string; score?: number }): Promise<NoteWithScore> {
+  const note = await prisma.note.findUnique({ where: { id }, select: { id: true } });
   if (!note) throw new Error('회의록을 찾을 수 없습니다.');
 
-  if (data.content !== undefined) {
-    await db.execute('UPDATE Note SET content = ? WHERE id = ?', [data.content, id]);
-  }
-  if (data.score !== undefined) {
-    await db.execute('UPDATE EmotionScore SET score = ? WHERE id = ?', [
-      data.score,
-      note.emotion_score_id,
-    ]);
-  }
-
-  const updated = await getNoteById(id);
-  if (!updated) throw new Error('회의록 수정에 실패했습니다.');
-  return updated;
+  const updated = await prisma.note.update({
+    where: { id },
+    data: {
+      ...(data.content !== undefined ? { content: data.content } : {}),
+      ...(data.score !== undefined ? { emotionscore: { update: { score: data.score } } } : {}),
+    },
+    include: noteInclude,
+  });
+  return toNoteWithScore(updated);
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  const note = await getNoteById(id);
+  const note = await prisma.note.findUnique({ where: { id }, select: { emotion_score_id: true } });
   if (!note) throw new Error('회의록을 찾을 수 없습니다.');
-  await db.execute('DELETE FROM Note WHERE id = ?', [id]);
-  await db.execute('DELETE FROM EmotionScore WHERE id = ?', [note.emotion_score_id]);
+  // 회의록 → 감정 점수 순서로 삭제 (외래 키 때문에), 둘 중 하나만 지워지지 않게 트랜잭션
+  await prisma.$transaction([
+    prisma.note.delete({ where: { id } }),
+    prisma.emotionScore.delete({ where: { id: note.emotion_score_id } }),
+  ]);
 }

@@ -1,30 +1,27 @@
 import bcrypt from 'bcryptjs';
-import db from '../config/db';
+import prisma from '../config/prisma';
 import { User } from '../types';
-import mysql from 'mysql2/promise';
 
 const SALT_ROUNDS = 10;
+const safeUserSelect = { id: true, email: true, nickname: true, state: true, createdAt: true } as const;
 
 export async function getUserById(id: string): Promise<Omit<User, 'password'> | null> {
-  const [rows] = await db.execute<mysql.RowDataPacket[]>(
-    'SELECT id, email, nickname, state, createdAt FROM User WHERE id = ?',
-    [id]
-  );
-  return rows.length > 0 ? (rows[0] as Omit<User, 'password'>) : null;
+  return prisma.user.findUnique({ where: { id }, select: safeUserSelect });
 }
 
 export async function updateProfile(
   id: string,
   data: { nickname?: string; password?: string }
 ): Promise<Omit<User, 'password'>> {
-  if (data.password) {
-    const hashed = await bcrypt.hash(data.password, SALT_ROUNDS);
-    await db.execute('UPDATE User SET password = ? WHERE id = ?', [hashed, id]);
-  }
-  if (data.nickname) {
-    await db.execute('UPDATE User SET nickname = ? WHERE id = ?', [data.nickname, id]);
-  }
-  const updated = await getUserById(id);
-  if (!updated) throw new Error('사용자를 찾을 수 없습니다.');
-  return updated;
+  const exists = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) throw new Error('사용자를 찾을 수 없습니다.');
+
+  return prisma.user.update({
+    where: { id },
+    data: {
+      ...(data.nickname ? { nickname: data.nickname } : {}),
+      ...(data.password ? { password: await bcrypt.hash(data.password, SALT_ROUNDS) } : {}),
+    },
+    select: safeUserSelect,
+  });
 }
