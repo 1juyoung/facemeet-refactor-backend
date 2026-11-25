@@ -3,8 +3,8 @@ import jwt from 'jsonwebtoken';
 import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import { User } from '../types';
+import { JWT_SECRET } from '../config/env';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'facemeet_secret';
 const SALT_ROUNDS = 10;
 
 type SafeUser = Omit<User, 'password'>;

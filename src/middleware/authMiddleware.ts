@@ -1,8 +1,8 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthRequest, JwtPayload } from '../types';
+import { JWT_SECRET } from '../config/env';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'facemeet_secret';
 
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
