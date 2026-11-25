@@ -1,30 +1,15 @@
-import express from 'express';
+import dotenv from 'dotenv';
+dotenv.config();
+
 import http from 'http';
-import cors from 'cors';
+import app from './app';
+import { createSocketServer } from './socket';
 
-const app = express();
-
-app.use(cors());
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const PORT = Number(process.env.PORT) || 3001;
 
 const server = http.createServer(app);
+createSocketServer(server);
 
-let chatMessages = []; //채팅을 저장하기 위한 변수
-
-app.post('/message', (req, res) => {
-  const { message } = req.body;
-  if (message) {
-    chatMessages.push(message);
-    res.status(200).json({ success: true, message: 'Message received' });
-  } else {
-    res.status(400).json({ success: false, message: 'No message provided' });
-  }
+server.listen(PORT, () => {
+  console.log(`🚀 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 });
-
-app.get('/message', async (req, res) => {
-  res.status(200).json(chatMessages);
-});
-
-server.listen(5000, () => console.log('Server running on port 5000'));
