@@ -18,6 +18,22 @@ const receiverPCs: Record<string, RTCPeerConnection> = {};
 const senderPCs: Record<string, Array<{ id: string; pc: RTCPeerConnection }>> = {};
 const users: Record<string, StreamEntry[]> = {};
 const socketToRoom: Record<string, string> = {};
+const NICKNAME_LIMIT = 20;
+// ---------- 참가자 상태 ----------
+// 영상을 보내지 않는 사람(권한 거부)도 참가자로 표시하기 위해 미디어 연결과 별도로 관리한다.
+interface ParticipantState {
+  id: string;
+  nickname: string;
+  audio: boolean;
+  video: boolean;
+}
+
+const participants: Record<string, Record<string, ParticipantState>> = {};
+
+function cleanNickname(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, NICKNAME_LIMIT) : fallback;
+}
+
 // ---------- 채팅 ----------
 interface ChatMessage {
   id: string;
@@ -29,7 +45,6 @@ interface ChatMessage {
 
 const CHAT_HISTORY_LIMIT = 100;
 const CHAT_TEXT_LIMIT = 500;
-const NICKNAME_LIMIT = 20;
 // 회의실별 최근 메시지 (서버 메모리). 방이 비면 삭제된다.
 const chatHistory: Record<string, ChatMessage[]> = {};
 
@@ -131,13 +146,40 @@ function closeSenderPCs(socketId: string): void {
 }
 
 export function registerMeetingSocket(io: Server, socket: Socket): void {
-  socket.on('joinRoom', (data: { id: string; roomID: string }) => {
+  socket.on(
+    'joinRoom',
+    (data: { id: string; roomID: string; nickname?: unknown; audio?: unknown; video?: unknown }) => {
     socket.join(data.roomID);
     socketToRoom[socket.id] = data.roomID;
+
+    const me: ParticipantState = {
+      id: socket.id,
+      nickname: cleanNickname(data.nickname, `게스트-${socket.id.slice(0, 4)}`),
+      audio: data.audio === true,
+      video: data.video === true,
+    };
+    const room = (participants[data.roomID] ??= {});
+    // 나에게는 이미 있던 참가자 목록, 다른 사람들에게는 내가 들어왔다는 알림
+    io.to(socket.id).emit('participants:list', { participants: Object.values(room) });
+    room[socket.id] = me;
+    socket.broadcast.to(data.roomID).emit('participant:joined', { participant: me });
+
     const allUsers = getOtherUsers(data.id, data.roomID);
     io.to(data.id).emit('allUsers', { users: allUsers });
     // 늦게 들어온 사람에게 지금까지의 채팅 전달
     io.to(data.id).emit('chat:history', { messages: chatHistory[data.roomID] ?? [] });
+    }
+  );
+
+  // 마이크·카메라 상태나 닉네임이 바뀌면 방 전체에 알림
+  socket.on('participant:update', (data: { nickname?: unknown; audio?: unknown; video?: unknown }) => {
+    const roomId = socketToRoom[socket.id];
+    const me = roomId ? participants[roomId]?.[socket.id] : undefined;
+    if (!me) return;
+    if (typeof data?.audio === 'boolean') me.audio = data.audio;
+    if (typeof data?.video === 'boolean') me.video = data.video;
+    if (data?.nickname !== undefined) me.nickname = cleanNickname(data.nickname, me.nickname);
+    io.to(roomId).emit('participant:updated', { participant: me });
   });
 
   socket.on('chat:send', (data: { text?: unknown; nickname?: unknown }) => {
@@ -145,10 +187,8 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
     if (!roomId || typeof data?.text !== 'string') return;
     const text = data.text.trim().slice(0, CHAT_TEXT_LIMIT);
     if (!text) return;
-    const nickname =
-      typeof data.nickname === 'string' && data.nickname.trim()
-        ? data.nickname.trim().slice(0, NICKNAME_LIMIT)
-        : '게스트';
+    // 참가자 목록에 등록된 닉네임을 우선 사용
+    const nickname = participants[roomId]?.[socket.id]?.nickname ?? cleanNickname(data.nickname, '게스트');
 
     const message: ChatMessage = {
       id: crypto.randomUUID(),
@@ -220,6 +260,11 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
     closeReceiverPC(socket.id);
     closeSenderPCs(socket.id);
     socket.broadcast.to(roomId).emit('userExit', { id: socket.id });
+    if (roomId && participants[roomId]) {
+      delete participants[roomId][socket.id];
+      if (Object.keys(participants[roomId]).length === 0) delete participants[roomId];
+      socket.broadcast.to(roomId).emit('participant:left', { id: socket.id });
+    }
     // 마지막 사람이 나가면 채팅 기록 삭제
     if (roomId && !io.sockets.adapter.rooms.get(roomId)?.size) delete chatHistory[roomId];
     console.log(`[Socket] 클라이언트 연결 해제: ${socket.id}`);
