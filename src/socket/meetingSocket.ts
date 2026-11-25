@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 // @ts-ignore – @roamhq/wrtc provides WebRTC APIs for Node.js
 import wrtc from '@roamhq/wrtc';
 
+import crypto from 'crypto';
 import { getServerIceServers } from '../config/ice';
 
 const pc_config = {
@@ -17,6 +18,21 @@ const receiverPCs: Record<string, RTCPeerConnection> = {};
 const senderPCs: Record<string, Array<{ id: string; pc: RTCPeerConnection }>> = {};
 const users: Record<string, StreamEntry[]> = {};
 const socketToRoom: Record<string, string> = {};
+// ---------- 채팅 ----------
+interface ChatMessage {
+  id: string;
+  senderId: string;
+  nickname: string;
+  text: string;
+  sentAt: string;
+}
+
+const CHAT_HISTORY_LIMIT = 100;
+const CHAT_TEXT_LIMIT = 500;
+const NICKNAME_LIMIT = 20;
+// 회의실별 최근 메시지 (서버 메모리). 방이 비면 삭제된다.
+const chatHistory: Record<string, ChatMessage[]> = {};
+
 // remoteDescription 설정 전에 도착한 candidate 보관
 const pendingCandidates = new WeakMap<RTCPeerConnection, RTCIceCandidateInit[]>();
 
@@ -116,8 +132,35 @@ function closeSenderPCs(socketId: string): void {
 
 export function registerMeetingSocket(io: Server, socket: Socket): void {
   socket.on('joinRoom', (data: { id: string; roomID: string }) => {
+    socket.join(data.roomID);
+    socketToRoom[socket.id] = data.roomID;
     const allUsers = getOtherUsers(data.id, data.roomID);
     io.to(data.id).emit('allUsers', { users: allUsers });
+    // 늦게 들어온 사람에게 지금까지의 채팅 전달
+    io.to(data.id).emit('chat:history', { messages: chatHistory[data.roomID] ?? [] });
+  });
+
+  socket.on('chat:send', (data: { text?: unknown; nickname?: unknown }) => {
+    const roomId = socketToRoom[socket.id];
+    if (!roomId || typeof data?.text !== 'string') return;
+    const text = data.text.trim().slice(0, CHAT_TEXT_LIMIT);
+    if (!text) return;
+    const nickname =
+      typeof data.nickname === 'string' && data.nickname.trim()
+        ? data.nickname.trim().slice(0, NICKNAME_LIMIT)
+        : '게스트';
+
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      senderId: socket.id,
+      nickname,
+      text,
+      sentAt: new Date().toISOString(),
+    };
+    const history = (chatHistory[roomId] ??= []);
+    history.push(message);
+    if (history.length > CHAT_HISTORY_LIMIT) history.shift();
+    io.to(roomId).emit('chat:message', message);
   });
 
   socket.on(
@@ -177,6 +220,8 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
     closeReceiverPC(socket.id);
     closeSenderPCs(socket.id);
     socket.broadcast.to(roomId).emit('userExit', { id: socket.id });
+    // 마지막 사람이 나가면 채팅 기록 삭제
+    if (roomId && !io.sockets.adapter.rooms.get(roomId)?.size) delete chatHistory[roomId];
     console.log(`[Socket] 클라이언트 연결 해제: ${socket.id}`);
   });
 }
