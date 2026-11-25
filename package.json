@@ -13,12 +13,13 @@
   "license": "ISC",
   "author": "1juyoung",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node app.js",
+    "start": "node dist/server.js",
     "dev": "nodemon",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "eslint ./src --ext .ts"
+    "lint": "eslint ./src --ext .ts",
+    "build": "tsc"
   },
   "dependencies": {
     "@roamhq/wrtc": "^0.10.0",
