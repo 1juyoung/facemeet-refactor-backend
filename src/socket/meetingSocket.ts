@@ -2,8 +2,10 @@ import { Server, Socket } from 'socket.io';
 // @ts-ignore – @roamhq/wrtc provides WebRTC APIs for Node.js
 import wrtc from '@roamhq/wrtc';
 
+import { getServerIceServers } from '../config/ice';
+
 const pc_config = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  iceServers: getServerIceServers(),
 };
 
 interface StreamEntry {
@@ -15,17 +17,40 @@ const receiverPCs: Record<string, RTCPeerConnection> = {};
 const senderPCs: Record<string, Array<{ id: string; pc: RTCPeerConnection }>> = {};
 const users: Record<string, StreamEntry[]> = {};
 const socketToRoom: Record<string, string> = {};
+// remoteDescription 설정 전에 도착한 candidate 보관
+const pendingCandidates = new WeakMap<RTCPeerConnection, RTCIceCandidateInit[]>();
+
+async function addCandidateSafely(pc: RTCPeerConnection, candidate: RTCIceCandidateInit): Promise<void> {
+  if (!pc.remoteDescription) {
+    const queue = pendingCandidates.get(pc) ?? [];
+    queue.push(candidate);
+    pendingCandidates.set(pc, queue);
+    return;
+  }
+  try {
+    await pc.addIceCandidate(new wrtc.RTCIceCandidate(candidate));
+  } catch (e) {
+    console.error('[ICE] candidate 추가 오류:', e);
+  }
+}
+
+async function flushCandidates(pc: RTCPeerConnection): Promise<void> {
+  const queue = pendingCandidates.get(pc) ?? [];
+  pendingCandidates.delete(pc);
+  for (const c of queue) await addCandidateSafely(pc, c);
+}
 
 function isIncluded(array: StreamEntry[], id: string): boolean {
   return array.some((item) => item.id === id);
 }
 
-function createReceiverPC(socketId: string, socket: Socket, roomId: string): RTCPeerConnection {
+function createReceiverPC(io: Server, socketId: string, socket: Socket, roomId: string): RTCPeerConnection {
   const pc: RTCPeerConnection = new wrtc.RTCPeerConnection(pc_config);
   receiverPCs[socketId] = pc;
 
   pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
-    socket.to(socketId).emit('getSenderCandidate', { candidate: e.candidate });
+    // socket.to()는 자기 자신을 제외하므로 io.to()로 본인에게 보낸다
+    io.to(socketId).emit('getSenderCandidate', { candidate: e.candidate });
   };
 
   (pc as any).ontrack = (e: RTCTrackEvent) => {
@@ -40,6 +65,7 @@ function createReceiverPC(socketId: string, socket: Socket, roomId: string): RTC
 }
 
 function createSenderPC(
+  io: Server,
   receiverSocketId: string,
   senderSocketId: string,
   socket: Socket,
@@ -51,7 +77,7 @@ function createSenderPC(
   senderPCs[senderSocketId].push({ id: receiverSocketId, pc });
 
   pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
-    socket.to(receiverSocketId).emit('getReceiverCandidate', {
+    io.to(receiverSocketId).emit('getReceiverCandidate', {
       id: senderSocketId,
       candidate: e.candidate,
     });
@@ -98,8 +124,9 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
     'senderOffer',
     async (data: { senderSocketID: string; roomID: string; sdp: RTCSessionDescriptionInit }) => {
       socketToRoom[data.senderSocketID] = data.roomID;
-      const pc = createReceiverPC(data.senderSocketID, socket, data.roomID);
+      const pc = createReceiverPC(io, data.senderSocketID, socket, data.roomID);
       await pc.setRemoteDescription(new wrtc.RTCSessionDescription(data.sdp));
+      await flushCandidates(pc);
       const sdp = await pc.createAnswer();
       await pc.setLocalDescription(sdp);
       socket.join(data.roomID);
@@ -111,9 +138,7 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
     'senderCandidate',
     async (data: { senderSocketID: string; candidate: RTCIceCandidateInit }) => {
       const pc = receiverPCs[data.senderSocketID];
-      if (pc && data.candidate) {
-        await pc.addIceCandidate(new wrtc.RTCIceCandidate(data.candidate));
-      }
+      if (pc && data.candidate) await addCandidateSafely(pc, data.candidate);
     }
   );
 
@@ -125,8 +150,9 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
       roomID: string;
       sdp: RTCSessionDescriptionInit;
     }) => {
-      const pc = createSenderPC(data.receiverSocketID, data.senderSocketID, socket, data.roomID);
+      const pc = createSenderPC(io, data.receiverSocketID, data.senderSocketID, socket, data.roomID);
       await pc.setRemoteDescription(new wrtc.RTCSessionDescription(data.sdp));
+      await flushCandidates(pc);
       const sdp = await pc.createAnswer();
       await pc.setLocalDescription(sdp);
       io.to(data.receiverSocketID).emit('getReceiverAnswer', { id: data.senderSocketID, sdp });
@@ -141,9 +167,7 @@ export function registerMeetingSocket(io: Server, socket: Socket): void {
       candidate: RTCIceCandidateInit;
     }) => {
       const entry = senderPCs[data.senderSocketID]?.find((p) => p.id === data.receiverSocketID);
-      if (entry && data.candidate) {
-        await entry.pc.addIceCandidate(new wrtc.RTCIceCandidate(data.candidate));
-      }
+      if (entry && data.candidate) await addCandidateSafely(entry.pc, data.candidate);
     }
   );
 
